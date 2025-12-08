@@ -1,368 +1,271 @@
+
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh">
 <head>
     <meta charset="UTF-8">
-    <title>3D 粒子交互 - 张城奥 & 大王来喽</title>
+    <title>Gesture Controlled Eye</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; }
-        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
-        #video-input { position: absolute; top: 10px; left: 10px; width: 160px; height: 120px; transform: scaleX(-1); z-index: 2; opacity: 0.5; border-radius: 8px; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #00ffcc; font-family: sans-serif; font-size: 24px; z-index: 3; pointer-events: none; }
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #video-input { display: none; transform: scaleX(-1); } /* 隐藏摄像头画面 */
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #00ffcc; font-family: monospace; font-size: 24px; text-align: center;
+        }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
-<div id="loading">正在初始化摄像头与模型...</div>
-<video id="video-input"></video>
-<div id="canvas-container"></div>
+    <div id="loading">正在初始化视觉神经...<br><span style="font-size:14px; color:#aaa">请允许摄像头权限</span></div>
+    <video id="video-input"></video>
+    <canvas id="output-canvas"></canvas>
 
 <script>
-    // --- 配置参数 ---
-    const PARTICLE_COUNT = 4000;
-    const PARTICLE_SIZE = 0.15; // 粒子大小
-    const CANVAS_FONT_SIZE = 100; // 用于生成文字的画布字号
-    const TEXT_1 = "张城奥";
-    const TEXT_2 = "大王来喽";
-    const LERP_SPEED = 0.08; // 粒子移动平滑度 (0-1)
+    const videoElement = document.getElementById('video-input');
+    const canvasElement = document.getElementById('output-canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const loadingDiv = document.getElementById('loading');
 
-    // --- 全局变量 ---
-    let scene, camera, renderer, particlesMesh;
-    let particlePositions = []; // 当前位置
-    let targetPositions = [];   // 目标位置
-    let colors = [];
+    // 状态变量
+    let eyeClosure = 0; // 0 = 睁开, 1 = 闭合
+    let targetClosure = 0;
     
-    // 预计算的形状数据
-    let shapeText1 = [];
-    let shapeText2 = [];
-    let shapeSphere = [];
-    let shapeExplode = []; // 爆炸状态的目标就是随机散开
-    
-    // 交互状态
-    let interactionState = 'IDLE'; // IDLE, TEXT1, SPHERE, TEXT2, EXPLODE
-    let rotationTarget = 0; // 文字旋转目标
-    let sphereScale = 1;    // 球体缩放比例
-
-    // --- 初始化 Three.js ---
-    function initThree() {
-        const container = document.getElementById('canvas-container');
-        scene = new THREE.Scene();
-        
-        // 摄像机设置
-        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.z = 20;
-
-        // 渲染器
-        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        container.appendChild(renderer.domElement);
-
-        // 创建粒子系统几何体
-        const geometry = new THREE.BufferGeometry();
-        const initialPos = new Float32Array(PARTICLE_COUNT * 3);
-        const initialColors = new Float32Array(PARTICLE_COUNT * 3);
-
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            // 初始随机分布
-            initialPos[i * 3] = (Math.random() - 0.5) * 50;
-            initialPos[i * 3 + 1] = (Math.random() - 0.5) * 50;
-            initialPos[i * 3 + 2] = (Math.random() - 0.5) * 50;
-            
-            // 颜色 (青色/蓝色调)
-            initialColors[i * 3] = 0.2;
-            initialColors[i * 3 + 1] = 0.8;
-            initialColors[i * 3 + 2] = 1.0;
-
-            particlePositions.push(new THREE.Vector3(initialPos[i*3], initialPos[i*3+1], initialPos[i*3+2]));
-            targetPositions.push(new THREE.Vector3(0, 0, 0));
-        }
-
-        geometry.setAttribute('position', new THREE.BufferAttribute(initialPos, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(initialColors, 3));
-
-        const material = new THREE.PointsMaterial({
-            size: PARTICLE_SIZE,
-            vertexColors: true,
-            blending: THREE.AdditiveBlending,
-            depthTest: false,
-            transparent: true
+    // 背景星星
+    const stars = [];
+    for(let i=0; i<150; i++) {
+        stars.push({
+            x: Math.random(), 
+            y: Math.random(), 
+            size: Math.random() * 2, 
+            alpha: Math.random()
         });
-
-        particlesMesh = new THREE.Points(geometry, material);
-        scene.add(particlesMesh);
-
-        // 生成各种形态的数据
-        shapeText1 = generateTextParticles(TEXT_1);
-        shapeText2 = generateTextParticles(TEXT_2);
-        shapeSphere = generateSphereParticles(8); // 半径8
-
-        // 默认目标设为散乱
-        resetToRandom();
-        
-        window.addEventListener('resize', onWindowResize, false);
-        animate();
     }
 
-    // --- 形状生成逻辑 (Canvas 扫描法) ---
-    function generateTextParticles(text) {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = 600; // 虚拟画布大小
-        canvas.height = 200;
+    // 调整画布大小
+    function resize() {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- 绘图函数 ---
+
+    function drawBackground() {
+        // 深空背景
+        const grad = canvasCtx.createLinearGradient(0, 0, 0, canvasElement.height);
+        grad.addColorStop(0, "#000000");
+        grad.addColorStop(1, "#0a0a2a");
+        canvasCtx.fillStyle = grad;
+        canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+
+        // 星星
+        canvasCtx.fillStyle = "white";
+        stars.forEach(star => {
+            canvasCtx.globalAlpha = star.alpha * (0.5 + Math.random() * 0.5); // 闪烁效果
+            canvasCtx.beginPath();
+            canvasCtx.arc(star.x * canvasElement.width, star.y * canvasElement.height, star.size, 0, Math.PI * 2);
+            canvasCtx.fill();
+        });
+        canvasCtx.globalAlpha = 1.0;
+    }
+
+    function drawCity() {
+        // 简单的赛博朋克城市剪影
+        canvasCtx.fillStyle = "#000033";
+        canvasCtx.beginPath();
+        const w = canvasElement.width;
+        const h = canvasElement.height;
+        const groundH = h * 0.75;
         
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.font = `bold ${CANVAS_FONT_SIZE}px "Microsoft YaHei", sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+        canvasCtx.moveTo(0, h);
+        canvasCtx.lineTo(0, groundH);
+        
+        // 随机生成一些建筑形状
+        for (let x = 0; x <= w; x += 30) {
+            let height = Math.sin(x * 0.01) * 50 + 50 + (x % 70); 
+            canvasCtx.lineTo(x, groundH - height);
+            canvasCtx.lineTo(x + 25, groundH - height);
+        }
+        
+        canvasCtx.lineTo(w, h);
+        canvasCtx.fill();
 
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imageData.data;
-        const points = [];
-
-        // 扫描像素
-        for (let y = 0; y < canvas.height; y += 4) { // 步长控制密度
-            for (let x = 0; x < canvas.width; x += 4) {
-                const index = (y * canvas.width + x) * 4;
-                if (data[index] > 128) { // 如果是亮色像素
-                    // 转换坐标: Canvas(0,0在左上) -> Three(0,0在中心)
-                    const posX = (x - canvas.width / 2) * 0.08; 
-                    const posY = -(y - canvas.height / 2) * 0.08;
-                    points.push(new THREE.Vector3(posX, posY, 0));
-                }
+        // 建筑灯光
+        canvasCtx.fillStyle = "#00ffcc";
+        for (let x = 10; x < w; x += 30) {
+            if (Math.random() > 0.7) {
+                 let height = Math.sin(x * 0.01) * 50 + 50 + (x % 70);
+                 canvasCtx.fillRect(x + 5, groundH - height + 10, 5, 5);
+                 canvasCtx.fillRect(x + 15, groundH - height + 30, 5, 5);
             }
         }
-        return mapPointsToParticles(points);
     }
 
-    function generateSphereParticles(radius) {
-        const points = [];
-        const phiSpan = Math.PI * (3 - Math.sqrt(5)); // 黄金角度
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            const y = 1 - (i / (PARTICLE_COUNT - 1)) * 2;
-            const r = Math.sqrt(1 - y * y);
-            const theta = phiSpan * i;
-            const x = Math.cos(theta) * r;
-            const z = Math.sin(theta) * r;
-            points.push(new THREE.Vector3(x * radius, y * radius, z * radius));
-        }
-        return points; // 球体本身就是刚好填满
+    function drawEye(cx, cy, width, height, closeAmount) {
+        canvasCtx.save();
+        
+        // 1. 眼睛轮廓 (Sclera)
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(cx - width, cy);
+        // 上眼睑曲线
+        canvasCtx.bezierCurveTo(cx - width/2, cy - height * 1.5, cx + width/2, cy - height * 1.5, cx + width, cy);
+        // 下眼睑曲线
+        canvasCtx.bezierCurveTo(cx + width/2, cy + height * 1.5, cx - width/2, cy + height * 1.5, cx - width, cy);
+        canvasCtx.fillStyle = "#e0e0e0"; // 眼白
+        canvasCtx.fill();
+        
+        // 裁剪区域，保证眼球不出界
+        canvasCtx.clip();
+
+        // 2. 虹膜 (Colorful Iris based on image)
+        const irisSize = height * 0.9;
+        
+        // 绘制复杂的虹膜图案
+        canvasCtx.beginPath();
+        canvasCtx.arc(cx, cy, irisSize, 0, Math.PI * 2);
+        
+        // 径向渐变模拟图片中的红绿彩色
+        const irisGrad = canvasCtx.createRadialGradient(cx, cy, irisSize * 0.2, cx, cy, irisSize);
+        irisGrad.addColorStop(0, "#000"); // 瞳孔边缘
+        irisGrad.addColorStop(0.4, "#ff0055"); // 红
+        irisGrad.addColorStop(0.7, "#ffff00"); // 黄
+        irisGrad.addColorStop(1, "#00ffcc"); // 青
+        
+        canvasCtx.fillStyle = irisGrad;
+        canvasCtx.fill();
+
+        // 瞳孔 (Pupil) - 猫眼/细长风格
+        canvasCtx.fillStyle = "#000";
+        canvasCtx.beginPath();
+        canvasCtx.ellipse(cx, cy, irisSize * 0.15, irisSize * 0.6, 0, 0, Math.PI * 2);
+        canvasCtx.fill();
+
+        // 高光
+        canvasCtx.fillStyle = "rgba(255, 255, 255, 0.8)";
+        canvasCtx.beginPath();
+        canvasCtx.arc(cx + irisSize*0.3, cy - irisSize*0.3, irisSize * 0.1, 0, Math.PI * 2);
+        canvasCtx.fill();
+
+        canvasCtx.restore(); // 恢复裁剪前的状态
+
+        // 3. 眼皮 (Eyelid Animation)
+        canvasCtx.save();
+        canvasCtx.fillStyle = "#0a0a2a"; // 皮肤/背景色
+        
+        // 上眼皮下移
+        let lidY = cy - height * 1.6 + (height * 1.6 * closeAmount);
+        
+        canvasCtx.beginPath();
+        canvasCtx.rect(cx - width * 1.2, cy - height * 2, width * 2.4, height * 2); // 覆盖整个区域
+        // 减去睁开的部分（这里用简单的矩形遮罩模拟闭合效果）
+        // 实际上，我们直接画一个矩形从上往下盖住
+        canvasCtx.clearRect(cx - width * 1.2, lidY, width * 2.4, height * 4); 
+        
+        // 为了更好的效果，我们需要反向画：画出眼皮遮盖的区域
+        // 重置路径
+        canvasCtx.beginPath();
+        
+        // 上眼皮
+        canvasCtx.moveTo(cx - width*1.2, cy);
+        canvasCtx.bezierCurveTo(cx - width/2, cy - height * 1.5, cx + width/2, cy - height * 1.5, cx + width*1.2, cy);
+        canvasCtx.lineTo(cx + width*1.2, cy - height * 3);
+        canvasCtx.lineTo(cx - width*1.2, cy - height * 3);
+        canvasCtx.fill();
+
+        // 动态闭合层
+        let currentLidY = (cy - height * 1.5) + (height * 1.5 * closeAmount); // 闭合到底部
+        canvasCtx.fillStyle = "#05051a"; // 眼皮颜色
+        canvasCtx.beginPath();
+        canvasCtx.rect(cx - width*1.2, cy - height*2, width*2.4, (currentLidY - (cy - height*2)));
+        canvasCtx.fill();
+        
+        // 下眼皮也可以稍微动一点
+        let bottomLidY = (cy + height * 1.5) - (height * 0.5 * closeAmount);
+        canvasCtx.beginPath();
+        canvasCtx.rect(cx - width*1.2, bottomLidY, width*2.4, height*2);
+        canvasCtx.fill();
+
+        canvasCtx.restore();
     }
 
-    // 将生成的少量的点映射到大量的粒子上（循环利用）
-    function mapPointsToParticles(sourcePoints) {
-        const mapped = [];
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            const p = sourcePoints[i % sourcePoints.length];
-            // 添加一点点随机偏移，让文字看起来更自然，不那么像栅格
-            mapped.push(new THREE.Vector3(
-                p.x + (Math.random()-0.5)*0.2, 
-                p.y + (Math.random()-0.5)*0.2, 
-                p.z
-            ));
-        }
-        return mapped;
+    function render() {
+        // 平滑过渡动画
+        eyeClosure += (targetClosure - eyeClosure) * 0.1;
+
+        drawBackground();
+        drawCity();
+        
+        // 绘制中间的大眼睛
+        const cx = canvasElement.width / 2;
+        const cy = canvasElement.height / 2 - 50;
+        const eyeW = 150;
+        const eyeH = 70;
+        
+        drawEye(cx, cy, eyeW, eyeH, eyeClosure);
+        
+        requestAnimationFrame(render);
     }
 
-    function resetToRandom() {
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            targetPositions[i].set(
-                (Math.random() - 0.5) * 60,
-                (Math.random() - 0.5) * 60,
-                (Math.random() - 0.5) * 30
-            );
-        }
-    }
+    // --- MediaPipe 逻辑 ---
 
-    function triggerExplosion() {
-        // 让目标点向外飞散
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            const dir = particlePositions[i].clone().normalize();
-            targetPositions[i].copy(dir.multiplyScalar(30 + Math.random() * 20));
-        }
-    }
-
-    // --- MediaPipe Hands 集成 ---
-    function initMediaPipe() {
-        const videoElement = document.getElementById('video-input');
-        const hands = new Hands({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }});
-
-        hands.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
-
-        hands.onResults(onHandsResults);
-
-        const cameraUtils = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 640,
-            height: 480
-        });
-        cameraUtils.start();
-    }
-
-    // 核心交互逻辑
-    function onHandsResults(results) {
-        document.getElementById('loading').style.display = 'none';
+    function onResults(results) {
+        loadingDiv.style.display = 'none';
 
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            const lm = results.multiHandLandmarks[0];
+            const landmarks = results.multiHandLandmarks[0];
             
-            // 获取关键点
-            // 8: Index Tip, 12: Middle Tip, 4: Thumb Tip, 0: Wrist
-            const indexTip = lm[8];
-            const middleTip = lm[12];
-            const thumbTip = lm[4];
-            const ringTip = lm[16];
-            const pinkyTip = lm[20];
-            const wrist = lm[0];
+            // 关键点: 4 (拇指指尖) 和 8 (食指指尖)
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            
+            // 计算距离 (简单的欧几里得距离，未考虑Z轴)
+            const distance = Math.sqrt(
+                Math.pow(thumbTip.x - indexTip.x, 2) + 
+                Math.pow(thumbTip.y - indexTip.y, 2)
+            );
 
-            // 1. 判断手势
-            // 简单逻辑：如果中指、无名指、小指都弯曲 (y坐标低于指关节)，则为单指模式
-            // 这是一个简化的判断，比较手指指尖和指根(PIP)的距离
+            // 阈值判断：距离越近，眼睛闭合度越高
+            // 0.03 认为是完全捏合，0.15 认为是完全张开
+            const minInfo = 0.03;
+            const maxInfo = 0.15;
             
-            const isIndexExtended = indexTip.y < lm[6].y; // 6 is Index PIP
-            const isMiddleExtended = middleTip.y < lm[10].y; // 10 is Middle PIP
-            
-            // 计算食指与拇指距离 (用于判断捏合/爆炸)
-            const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
-            
-            // 计算食指与中指距离 (用于判断双指张开)
-            const spreadDist = Math.hypot(indexTip.x - middleTip.x, indexTip.y - middleTip.y);
-
-            // === 状态机逻辑 ===
-            
-            // 双指模式 (食指和中指都伸直)
-            if (isIndexExtended && isMiddleExtended) {
-                // 判断是 "Sphere" 还是 "Big Text"
-                // 归一化距离通常在 0.05 到 0.3 之间
-                if (spreadDist > 0.15) {
-                    interactionState = 'TEXT2'; // 张得够大 -> "大王来喽"
-                } else {
-                    interactionState = 'SPHERE'; // 双指并拢或微张 -> 球体
-                    // 根据距离缩放球体
-                    sphereScale = 1 + (spreadDist * 10); 
-                }
-            } 
-            // 单指模式 (仅食指伸直，或者只是大概的手部位置)
-            else if (isIndexExtended) {
-                // 检查是否握拳 (捏合爆炸)
-                // 这里我们定义：如果处于单指模式，但拇指突然很靠近食指关节或者整个手掌闭合
-                // 简化：如果 thumbTip 和 indexTip 非常近 -> EXPLODE
-                if (pinchDist < 0.05) {
-                    if (interactionState !== 'EXPLODE') {
-                         interactionState = 'EXPLODE';
-                         triggerExplosion();
-                    }
-                } else {
-                    interactionState = 'TEXT1'; // "张城奥"
-                    // 映射 X 轴位置 (MediaPipe 0-1) 到 旋转角度 (-PI 到 PI)
-                    // MediaPipe x 也是反的，因为我们在 CSS 里镜像了 video
-                    rotationTarget = (indexTip.x - 0.5) * Math.PI * 2; 
-                }
-            } else {
-                // 手掌可能握紧了 (也是爆炸的一种触发方式)
-                 if (pinchDist < 0.1 && interactionState === 'TEXT1') {
-                     interactionState = 'EXPLODE';
-                     triggerExplosion();
-                 }
-            }
-
+            let closure = 1 - ((distance - minInfo) / (maxInfo - minInfo));
+            // 限制在 0 到 1 之间
+            targetClosure = Math.max(0, Math.min(1, closure));
         } else {
-            // 没有手，恢复随机或空闲
-            // interactionState = 'IDLE';
-            // 保持上一个状态或慢慢飘散，这里选择慢慢回正
-            rotationTarget = 0;
+            // 没有检测到手，默认睁开
+            targetClosure = 0;
         }
     }
 
-    // --- 动画循环 ---
-    function animate() {
-        requestAnimationFrame(animate);
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
 
-        const positions = particlesMesh.geometry.attributes.position.array;
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
 
-        // 更新目标位置
-        if (interactionState === 'TEXT1') {
-            // 文字1 "张城奥"
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                const t = shapeText1[i % shapeText1.length];
-                // 应用旋转
-                const cosR = Math.cos(rotationTarget);
-                const sinR = Math.sin(rotationTarget);
-                // 绕 Y 轴旋转: x' = x*cos - z*sin, z' = x*sin + z*cos
-                targetPositions[i].set(
-                    t.x * cosR - t.z * sinR, 
-                    t.y, 
-                    t.x * sinR + t.z * cosR
-                );
-            }
-        } else if (interactionState === 'SPHERE') {
-            // 球体
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                const t = shapeSphere[i];
-                targetPositions[i].copy(t).multiplyScalar(sphereScale);
-            }
-        } else if (interactionState === 'TEXT2') {
-            // 文字2 "大王来喽"
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                const t = shapeText2[i % shapeText2.length];
-                targetPositions[i].copy(t);
-            }
-        } 
-        // EXPLODE 状态下 targetPositions 已经在 triggerExplosion 中设置为了远方，此处无需更新
+    hands.onResults(onResults);
 
-        // 物理平滑运动 (Lerp)
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            const cur = particlePositions[i];
-            const tgt = targetPositions[i];
-
-            cur.x += (tgt.x - cur.x) * LERP_SPEED;
-            cur.y += (tgt.y - cur.y) * LERP_SPEED;
-            cur.z += (tgt.z - cur.z) * LERP_SPEED;
-
-            // 如果是爆炸模式，给一点阻尼让它最终停在远处，或者加一点重力
-            // 这里为了演示简单，仅做简单位移
-
-            // 更新 BufferGeometry
-            positions[i * 3] = cur.x;
-            positions[i * 3 + 1] = cur.y;
-            positions[i * 3 + 2] = cur.z;
-        }
-
-        particlesMesh.geometry.attributes.position.needsUpdate = true;
-        
-        // 只有在非文字模式下才让整个 Mesh 缓慢自转一点点增加动感
-        if (interactionState !== 'TEXT1') {
-            particlesMesh.rotation.y += 0.002;
-        } else {
-            particlesMesh.rotation.y = 0; // 文字模式由手指控制绝对角度
-        }
-
-        renderer.render(scene, camera);
-    }
-
-    function onWindowResize() {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    }
-
-    // --- 启动 ---
-    initThree();
-    initMediaPipe();
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 640,
+        height: 480
+    });
+    
+    camera.start();
+    render(); // 开始渲染循环
 
 </script>
 </body>
