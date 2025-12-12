@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEURAL_LINK // 脑机接口可视化</title>
+    <!-- React Core -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100;400;700&family=Noto+Sans+SC:wght@100;400;700&display=swap');
+
+        body {
+            background-color: #e0e0e0;
+            color: #050505;
+            font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+            overflow-x: hidden;
+        }
+
+        /* Glitch Effect */
+        .glitch-text {
+            position: relative;
+        }
+        
+        .glitch-text::before,
+        .glitch-text::after {
+            content: attr(data-text);
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .glitch-text::before {
+            left: 2px;
+            text-shadow: -1px 0 #0000ff;
+            clip: rect(24px, 550px, 90px, 0);
+            animation: glitch-anim-2 3s infinite linear alternate-reverse;
+        }
+
+        .glitch-text::after {
+            left: -2px;
+            text-shadow: -1px 0 #ff0000;
+            clip: rect(85px, 550px, 140px, 0);
+            animation: glitch-anim 2.5s infinite linear alternate-reverse;
+        }
+
+        @keyframes glitch-anim {
+            0% { clip: rect(14px, 9999px, 122px, 0); }
+            20% { clip: rect(45px, 9999px, 22px, 0); }
+            40% { clip: rect(100px, 9999px, 88px, 0); }
+            60% { clip: rect(12px, 9999px, 66px, 0); }
+            80% { clip: rect(110px, 9999px, 21px, 0); }
+            100% { clip: rect(77px, 9999px, 11px, 0); }
+        }
+
+        @keyframes glitch-anim-2 {
+            0% { clip: rect(65px, 9999px, 100px, 0); }
+            20% { clip: rect(12px, 9999px, 44px, 0); }
+            40% { clip: rect(88px, 9999px, 12px, 0); }
+            60% { clip: rect(33px, 9999px, 55px, 0); }
+            80% { clip: rect(11px, 9999px, 99px, 0); }
+            100% { clip: rect(55px, 9999px, 33px, 0); }
+        }
+
+        /* Grid Background */
+        .fragment-grid {
+            background-image: linear-gradient(#b0b0b0 1px, transparent 1px),
+            linear-gradient(90deg, #b0b0b0 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+
+        .scanline {
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.05) 50%,
+                rgba(0,0,0,0.05)
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+        }
+
+        /* 3D Preserve */
+        .preserve-3d {
+            transform-style: preserve-3d;
+        }
+        .backface-hidden {
+            backface-visibility: hidden;
+        }
+        .perspective-1000 {
+            perspective: 1000px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- SVGs as Components (No external dependency) ---
+        const IconActivity = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
+        const IconEye = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>;
+        const IconLayers = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>;
+        const IconZap = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>;
+        const IconNetwork = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>;
+        const IconDisc = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>;
+        const IconCpu = () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>;
+        const IconMaximize = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>;
+
+        // --- Data ---
+        const DATA_MODULES = [
+            {
+                id: "01",
+                file: "1000015118.jpg",
+                title: "拟态模拟 // MIMICRY",
+                desc: "身份与环境的去边界化。在自然流体旁进行的原始面具仪式，象征着模拟信号与数字人格的初次握手。",
+                tech_stat: "SYNC: 98%",
+                Icon: IconActivity
+            },
+            {
+                id: "02",
+                file: "1000015120.jpg",
+                title: "电子凝视 // CRT_GAZE",
+                desc: "屏幕后的意识回响。将人类面部映射至阴极射线管，构建出的第二观察者。它是系统的眼睛。",
+                tech_stat: "VOLTAGE: HIGH",
+                is3D: true, 
+                Icon: IconEye
+            },
+            {
+                id: "03",
+                file: "1000015122.jpg",
+                title: "记忆碎片 // FRAGMENTS",
+                desc: "数据丢失与重组。蓝色背景象征着系统崩溃(BSOD)，人格碎片在离散空间中漂浮，试图重构完整逻辑。",
+                tech_stat: "ERR: 404",
+                Icon: IconLayers
+            },
+            {
+                id: "04",
+                file: "1000015124.jpg",
+                title: "突触接入 // WIRED_IN",
+                desc: "神经信号的直接转译。多路脑电极帽（EEG）连接，将生物电转化为二进制流。思维即是代码。",
+                tech_stat: "BW: 500TB/s",
+                Icon: IconZap
+            },
+            {
+                id: "05",
+                file: "1000015126.jpg",
+                title: "监控矩阵 // PANOPTICON",
+                desc: "信息的全景监狱。被屏幕环绕的个体，在过载的信息流中蜷缩，既是节点也是囚徒。",
+                tech_stat: "NODES: 12",
+                Icon: IconNetwork
+            },
+            {
+                id: "06",
+                file: "1000015128.jpg",
+                title: "硬件休眠 // DORMANCY",
+                desc: "躯体作为外设。当意识上传至网络，肉体与旧时代电子垃圾一同排列，进入低功耗待机模式。",
+                tech_stat: "SLEEP: ON",
+                Icon: IconDisc
+            }
+        ];
+
+        // --- 3D Rotator Component ---
+        const Rotator3D = ({ imgUrl }) => {
+            const [rotate, setRotate] = useState({ x: 0, y: 0 });
+            const containerRef = useRef(null);
+
+            const handleMouseMove = (e) => {
+                if (!containerRef.current) return;
+                const rect = containerRef.current.getBoundingClientRect();
+                
+                // Calculate relative position inside the box
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+
+                // Enhanced rotation sensitivity
+                const rotateX = ((y - centerY) / centerY) * -30; // Tilt up/down
+                const rotateY = ((x - centerX) / centerX) * 30;  // Turn left/right
+
+                setRotate({ x: rotateX, y: rotateY });
+            };
+
+            const handleMouseLeave = () => {
+                setRotate({ x: 0, y: 0 }); // Reset on leave
+            };
+
+            return (
+                <div 
+                    ref={containerRef}
+                    className="w-full h-80 md:h-96 flex items-center justify-center relative overflow-hidden bg-gray-900 border-2 border-blue-600 cursor-crosshair perspective-1000"
+                    onMouseMove={handleMouseMove}
+                    onMouseLeave={handleMouseLeave}
+                    onTouchMove={(e) => handleMouseMove(e.touches[0])} // Basic touch support
+                >
+                    {/* Background Grid inside 3D view */}
+                    <div className="absolute inset-0 z-0 opacity-20 pointer-events-none" style={{
+                        backgroundImage: 'radial-gradient(circle, #444 1px, transparent 1px)',
+                        backgroundSize: '20px 20px'
+                    }}></div>
+                    
+                    {/* The 3D Cube/Plane */}
+                    <div 
+                        className="relative w-48 h-48 md:w-64 md:h-64 transition-transform duration-75 ease-out preserve-3d shadow-2xl"
+                        style={{ 
+                            transform: `rotateX(${rotate.x}deg) rotateY(${rotate.y}deg)`
+                        }}
+                    >
+                        {/* Front Face (Image) */}
+                        <div className="absolute inset-0 backface-hidden border-4 border-gray-800 bg-black">
+                             <img 
+                                src={imgUrl} 
+                                alt="3D Interface" 
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                    e.target.style.display = 'none';
+                                    e.target.parentNode.style.backgroundColor = '#00f';
+                                    e.target.parentNode.innerHTML = '<div class="w-full h-full flex items-center justify-center text-white font-mono text-center p-2">IMG_ERR<br/>SIGNAL_LOST</div>';
+                                }}
+                            />
+                            {/* Overlay UI on the 3D element */}
+                            <div className="absolute top-2 left-2 text-[10px] text-green-500 font-bold bg-black/80 px-1 border border-green-500">LIVE FEED</div>
+                            <div className="absolute bottom-2 right-2 w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                        </div>
+
+                        {/* Back Face (Circuitry/Data) */}
+                        <div 
+                            className="absolute inset-0 backface-hidden bg-blue-900 border-4 border-blue-500 flex flex-col items-center justify-center text-blue-100 font-mono text-xs p-4 shadow-[0_0_20px_rgba(0,0,255,0.5)]"
+                            style={{ transform: 'rotateY(180deg)' }}
+                        >
+                            <h4 className="font-bold border-b border-blue-400 mb-2">SYSTEM_CORE</h4>
+                            <p className="text-[10px] leading-tight opacity-80 font-mono text-center">
+                                NEURAL_HANDSHAKE:<br/>
+                                [||||||||||] 100%<br/><br/>
+                                LATENCY: 4ms<br/>
+                                PACKET_LOSS: 0%
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* HUD Elements Overlaying the 3D scene */}
+                    <div className="absolute top-4 right-4 text-blue-500 font-mono text-xs text-right pointer-events-none">
+                        <p>X: {rotate.x.toFixed(1)}°</p>
+                        <p>Y: {rotate.y.toFixed(1)}°</p>
+                    </div>
+                    <div className="absolute bottom-4 left-4 text-gray-500 font-mono text-[10px] pointer-events-none">
+                        [DRAG_TO_ROTATE_VIEW]
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main App Component ---
+        const App = () => {
+            const [time, setTime] = useState(new Date().toLocaleTimeString());
+
+            useEffect(() => {
+                const timer = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
+                return () => clearInterval(timer);
+            }, []);
+
+            return (
+                <div className="min-h-screen relative selection:bg-blue-600 selection:text-white pb-20">
+                    
+                    {/* Background Elements */}
+                    <div className="fixed inset-0 fragment-grid opacity-20 -z-20"></div>
+                    <div className="fixed inset-0 scanline -z-10"></div>
+
+                    {/* Header */}
+                    <header className="sticky top-0 z-50 bg-[#e0e0e0]/90 backdrop-blur border-b-2 border-black flex justify-between items-center px-4 py-3 md:px-8 shadow-sm">
+                        <div className="flex items-center space-x-3">
+                            <div className="text-blue-700 animate-pulse">
+                                <IconCpu />
+                            </div>
+                            <h1 className="text-xl md:text-2xl font-bold tracking-tighter uppercase glitch-text select-none" data-text="NEURAL_LINK">
+                                NEURAL_LINK
+                            </h1>
+                        </div>
+                        <div className="flex items-center space-x-4 text-xs md:text-sm font-mono">
+                            <span className="hidden md:inline">SYS_STATUS: <span className="text-green-700 font-bold">ONLINE</span></span>
+                            <span className="bg-black text-white px-2 py-1">{time}</span>
+                        </div>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="container mx-auto px-4 py-8 max-w-7xl">
+                        
+                        {/* Hero Text */}
+                        <div className="mb-12 border-l-8 border-black pl-6 py-4 bg-white/50">
+                            <h2 className="text-3xl md:text-5xl font-black mb-3 uppercase tracking-tight text-gray-900">
+                                Consciousness <br/> Digitization_
+                            </h2>
+                            <p className="max-w-2xl text-gray-700 font-mono text-sm leading-relaxed">
+                                > DETECTED_USER: ADMIN<br/>
+                                > 正在加载脑机接口协议 V2.0...<br/>
+                                > 解析上传的神经影像碎片，正在构建虚拟人格...
+                            </p>
+                        </div>
+
+                        {/* Bento Grid Layout */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-fr">
+                            
+                            {DATA_MODULES.map((item, index) => {
+                                // --- Special Layout for the 3D Item (Image 2) ---
+                                if (item.is3D) {
+                                    return (
+                                        <div key={item.id} className="col-span-1 md:col-span-2 row-span-2 border-2 border-black bg-white p-2 relative shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] flex flex-col">
+                                            {/* Header Bar */}
+                                            <div className="flex justify-between items-center mb-2 border-b-2 border-gray-100 pb-2 px-1">
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="bg-blue-600 text-white text-[10px] px-1 font-mono py-0.5">FIG.{item.id}</span>
+                                                    <h3 className="font-bold text-lg uppercase tracking-wide">{item.title}</h3>
+                                                </div>
+                                                <div className="opacity-50 hover:opacity-100 cursor-pointer">
+                                                    <IconMaximize />
+                                                </div>
+                                            </div>
+                                            
+                                            {/* The 3D Component */}
+                                            <div className="flex-grow flex flex-col justify-center">
+                                                <Rotator3D imgUrl={item.file} />
+                                            </div>
+
+                                            {/* Description Footer */}
+                                            <div className="mt-4 font-mono text-sm border-t border-dashed border-gray-400 pt-3 px-1">
+                                                <div className="flex justify-between text-xs text-gray-500 mb-2 font-bold">
+                                                    <span>{item.tech_stat}</span>
+                                                    <span>ANALYSIS_DEPTH: 100%</span>
+                                                </div>
+                                                <p className="text-gray-800 leading-relaxed text-xs md:text-sm">
+                                                    {item.desc}
+                                                </p>
+                                            </div>
+                                            
+                                            {/* Tech Decors */}
+                                            <div className="absolute top-0 right-0 w-3 h-3 bg-blue-600"></div>
+                                            <div className="absolute bottom-0 left-0 w-3 h-3 bg-blue-600"></div>
+                                        </div>
+                                    );
+                                }
+
+                                // --- Standard Card Layout ---
+                                return (
+                                    <div key={item.id} className="border border-gray-400 bg-gray-50 p-4 hover:bg-white hover:border-black hover:shadow-[5px_5px_0px_0px_rgba(0,0,255,1)] transition-all duration-200 flex flex-col h-full group">
+                                        
+                                        {/* Image Container */}
+                                        <div className="relative aspect-square overflow-hidden border border-black mb-4 bg-gray-200">
+                                            <div className="absolute inset-0 bg-blue-600 mix-blend-hard-light opacity-0 group-hover:opacity-20 transition-opacity z-10 pointer-events-none"></div>
+                                            <img 
+                                                src={item.file} 
+                                                alt={item.title} 
+                                                className="w-full h-full object-cover filter grayscale contrast-125 group-hover:grayscale-0 transition-all duration-500 group-hover:scale-105"
+                                                onError={(e) => {
+                                                    e.target.onerror = null;
+                                                    // Placeholder if local image fails
+                                                    e.target.src = 'data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%22200%22%20height%3D%22200%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20200%20200%22%20preserveAspectRatio%3D%22none%22%3E%3Cdefs%3E%3Cstyle%20type%3D%22text%2Fcss%22%3E%23holder_1%20text%20%7B%20fill%3A%23AAAAAA%3Bfont-weight%3Abold%3Bfont-family%3Amonospace%3Bfont-size%3A14pt%20%7D%20%3C%2Fstyle%3E%3C%2Fdefs%3E%3Cg%20id%3D%22holder_1%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%23EEEEEE%22%3E%3C%2Frect%3E%3Cg%3E%3Ctext%20x%3D%2260%22%20y%3D%22105%22%3EIMAGE_ERR%3C%2Ftext%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fsvg%3E';
+                                                }}
+                                            />
+                                            <div className="absolute top-2 left-2 bg-black text-white text-[10px] px-1 font-mono z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                SRC: LOCAL
+                                            </div>
+                                        </div>
+
+                                        {/* Content */}
+                                        <div className="flex items-center space-x-2 mb-3 text-blue-800">
+                                            <item.Icon />
+                                            <span className="text-[10px] font-bold tracking-widest font-mono border border-blue-200 px-1">{item.tech_stat}</span>
+                                        </div>
+
+                                        <h3 className="font-bold text-lg mb-2 leading-none">{item.title}</h3>
+                                        <div className="w-8 h-1 bg-black mb-3"></div>
+                                        
+                                        <p className="text-xs md:text-sm text-gray-600 leading-snug flex-grow font-mono">
+                                            {item.desc}
+                                        </p>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="fixed bottom-0 left-0 w-full bg-black text-white py-2 px-4 text-[10px] md:text-xs font-mono flex justify-between items-center z-50 border-t border-gray-500">
+                        <div className="flex space-x-6">
+                            <span>MEM_ALLOC: 64MB</span>
+                            <span className="hidden md:inline">RENDER: GPU_ACCEL</span>
+                        </div>
+                        <div className="uppercase tracking-widest animate-pulse flex items-center">
+                            <span className="w-2 h-2 bg-green-500 rounded-full mr-2 inline-block"></span>
+                            Awaiting Neural Input_
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
+
